@@ -2,6 +2,11 @@ name: Build Extension
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: '版本號 (例如: 1.0.0)'
+        required: true
+        type: string
 
 jobs:
   build:
@@ -22,14 +27,45 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Build Extension (Debug)
+      - name: Prepare signing key
+        run: |
+          echo ${{ secrets.SIGNING_KEY }} | base64 -d > signingkey.jks
+
+      - name: Build Extension (Release)
+        env:
+          ALIAS: ${{ secrets.ALIAS }}
+          KEY_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           chmod +x ./gradlew
-          ./gradlew :src:all:googledrive:assembleDebug
+          ./gradlew :src:all:googledrive:assembleRelease
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+      - name: Rename APK
+        run: |
+          mkdir -p release
+          cp src/all/googledrive/build/outputs/apk/release/*.apk release/googledrive-v${{ inputs.version }}.apk
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: googledrive-extension
-          path: src/all/googledrive/build/outputs/apk/debug/*.apk
-          retention-days: 30
+          tag_name: v${{ inputs.version }}
+          name: Google Drive Extension v${{ inputs.version }}
+          body: |
+            ## Google Drive Extension v${{ inputs.version }}
+            
+            ### 安裝說明
+            1. 下載下方的 APK 檔案
+            2. 安裝到你的 Android 裝置
+            3. 在 Mihon 中設定 API Key
+            
+            ### Installation
+            1. Download the APK file below
+            2. Install on your Android device
+            3. Configure API Key in Mihon
+          files: release/*.apk
+          draft: false
+          prerelease: false
+
+      - name: Clean up
+        if: always()
+        run: rm -f signingkey.jks
