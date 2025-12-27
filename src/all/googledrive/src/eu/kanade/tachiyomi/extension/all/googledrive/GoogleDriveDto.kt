@@ -12,6 +12,6 @@ data class DriveFilesResponse(
 data class DriveFile(
     val id: String,
     val name: String,
-    val mimeType: String,
+    val mimeType: String = "",
     val webContentLink: String? = null
 )
