@@ -85,7 +85,7 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
     }
 
     override fun searchMangaParse(response: Response): MangasPage {
-        val result = json.decodeFromString<DriveFilesResponse>(response.body.string())
+        val result = response.parseAs<DriveFilesResponse>()
 
         val mangas = result.files.map { file ->
             SManga.create().apply {
@@ -129,7 +129,7 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
     }
 
     override fun mangaDetailsParse(response: Response): SManga {
-        val result = json.decodeFromString<DriveFilesResponse>(response.body.string())
+        val result = response.parseAs<DriveFilesResponse>()
 
         return SManga.create().apply {
             initialized = true
@@ -163,7 +163,7 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
     }
 
     override fun chapterListParse(response: Response): List<SChapter> {
-        val result = json.decodeFromString<DriveFilesResponse>(response.body.string())
+        val result = response.parseAs<DriveFilesResponse>()
 
         return result.files
             .filter { file ->
@@ -219,7 +219,7 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
 
         // Check if this is a single file response (ZIP/CBZ)
         if (responseBody.contains("\"webContentLink\"") && !responseBody.contains("\"files\"")) {
-            val file = json.decodeFromString<DriveFile>(responseBody)
+            val file = json.decodeFromString(DriveFile.serializer(), responseBody)
             // Return the direct download URL for the archive
             // Note: Mihon may not support reading archives directly via URL
             // In that case, users should use folder structure instead
@@ -227,7 +227,7 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
             return listOf(Page(0, "", downloadUrl))
         }
 
-        val result = json.decodeFromString<DriveFilesResponse>(responseBody)
+        val result = json.decodeFromString(DriveFilesResponse.serializer(), responseBody)
 
         return result.files
             .filter { it.mimeType.startsWith("image/") }
@@ -256,6 +256,10 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
 
     private fun buildImageUrl(fileId: String): String {
         return "$baseUrl/files/$fileId?alt=media&key=$apiKey"
+    }
+
+    private inline fun <reified T> Response.parseAs(): T {
+        return json.decodeFromString(kotlinx.serialization.serializer(), body.string())
     }
 
     // ============================== Settings ==============================
