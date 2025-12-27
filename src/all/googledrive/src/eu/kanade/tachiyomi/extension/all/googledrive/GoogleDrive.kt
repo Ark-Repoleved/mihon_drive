@@ -315,7 +315,8 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
     }
 
     private fun buildImageUrl(fileId: String): String {
-        return "$baseUrl/files/$fileId?alt=media&key=$apiKey"
+        // Use direct download link format instead of API format
+        return "https://drive.google.com/uc?export=view&id=$fileId"
     }
 
     private inline fun <reified T> Response.parseAs(): T {
