@@ -299,8 +299,7 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
         // Check if this is a single file response (ZIP/CBZ)
         if (responseBody.contains("\"webContentLink\"") && !responseBody.contains("\"files\"")) {
             val file = json.decodeFromString(DriveFile.serializer(), responseBody)
-            val downloadUrl = "$baseUrl/files/${file.id}?alt=media&key=$apiKey"
-            return listOf(Page(0, "", downloadUrl))
+            return parseZipFile(file.id)
         }
 
         val result = json.decodeFromString(DriveFilesResponse.serializer(), responseBody)
@@ -311,6 +310,55 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
             .mapIndexed { index, file ->
                 Page(index, "", buildImageUrl(file.id))
             }
+    }
+
+    private fun parseZipFile(fileId: String): List<Page> {
+        val downloadUrl = "$baseUrl/files/$fileId?alt=media&key=$apiKey"
+        val zipResponse = client.newCall(GET(downloadUrl, headers)).execute()
+
+        if (!zipResponse.isSuccessful) {
+            throw Exception("無法下載壓縮檔")
+        }
+
+        val pages = mutableListOf<Page>()
+        val zipBytes = zipResponse.body.bytes()
+
+        java.util.zip.ZipInputStream(java.io.ByteArrayInputStream(zipBytes)).use { zipStream ->
+            var entry = zipStream.nextEntry
+            val imageEntries = mutableListOf<Pair<String, ByteArray>>()
+
+            while (entry != null) {
+                val name = entry.name.lowercase()
+                if (!entry.isDirectory && (name.endsWith(".jpg") || name.endsWith(".jpeg") ||
+                        name.endsWith(".png") || name.endsWith(".gif") || name.endsWith(".webp"))) {
+                    val imageBytes = zipStream.readBytes()
+                    imageEntries.add(entry.name to imageBytes)
+                }
+                zipStream.closeEntry()
+                entry = zipStream.nextEntry
+            }
+
+            // Sort by filename and create pages
+            imageEntries
+                .sortedBy { it.first }
+                .forEachIndexed { index, (name, bytes) ->
+                    val mimeType = when {
+                        name.lowercase().endsWith(".png") -> "image/png"
+                        name.lowercase().endsWith(".gif") -> "image/gif"
+                        name.lowercase().endsWith(".webp") -> "image/webp"
+                        else -> "image/jpeg"
+                    }
+                    val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+                    val dataUri = "data:$mimeType;base64,$base64"
+                    pages.add(Page(index, "", dataUri))
+                }
+        }
+
+        if (pages.isEmpty()) {
+            throw Exception("壓縮檔內沒有圖片")
+        }
+
+        return pages
     }
 
     override fun imageUrlParse(response: Response): String {
