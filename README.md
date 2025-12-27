@@ -45,7 +45,8 @@ A custom Mihon (Tachiyomi) extension that uses Google Drive as a manga source.
 1. Find **Google Drive** extension in Mihon
 2. Long press to enter settings
 3. Enter your **API Key**
-4. Enter the folder link in the search page
+4. Enter your **Google Drive folder link**
+5. Go back and browse the extension to see your manga
 
 ## Local Build
 
