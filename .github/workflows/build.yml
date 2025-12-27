@@ -24,6 +24,7 @@ jobs:
 
       - name: Build Extension (Debug)
         run: |
+          chmod +x ./gradlew
           ./gradlew :src:all:googledrive:assembleDebug
 
       - name: Upload APK
@@ -32,4 +33,3 @@ jobs:
           name: googledrive-extension
           path: src/all/googledrive/build/outputs/apk/debug/*.apk
           retention-days: 30
-
