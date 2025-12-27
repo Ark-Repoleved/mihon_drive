@@ -1,0 +1,22 @@
+# Gradle build files
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# IDE files
+.idea/
+*.iml
+local.properties
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# APK files (download from Actions instead)
+*.apk
+
+# Signing key
+signingkey.jks
+
+# Reference project (not needed in repo)
+extensions-source-main/
