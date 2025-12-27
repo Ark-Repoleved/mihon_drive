@@ -19,8 +19,6 @@ import okhttp3.Request
 import okhttp3.Response
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
-import java.text.SimpleDateFormat
-import java.util.Locale
 
 class GoogleDrive : HttpSource(), ConfigurableSource {
 
@@ -104,7 +102,7 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
 
     override fun getFilterList(): FilterList = FilterList(
         Filter.Header("輸入 Google Drive 資料夾連結"),
-        FolderUrlFilter(),
+        FolderUrlFilter()
     )
 
     class FolderUrlFilter : Filter.Text("資料夾連結")
