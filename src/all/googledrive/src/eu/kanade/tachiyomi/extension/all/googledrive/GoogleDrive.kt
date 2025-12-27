@@ -6,7 +6,6 @@ import androidx.preference.EditTextPreference
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.ConfigurableSource
-import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
@@ -36,14 +35,44 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
     private val apiKey: String
         get() = preferences.getString(API_KEY_PREF, "") ?: ""
 
+    private val folderUrl: String
+        get() = preferences.getString(FOLDER_URL_PREF, "") ?: ""
+
+    private val folderId: String
+        get() = extractFolderId(folderUrl)
+
     // ============================== Popular ===============================
 
     override fun popularMangaRequest(page: Int): Request {
-        throw UnsupportedOperationException("Use search with folder URL")
+        if (apiKey.isBlank()) {
+            throw Exception("請在擴充功能設定中輸入 Google Cloud API Key")
+        }
+        if (folderUrl.isBlank()) {
+            throw Exception("請在擴充功能設定中輸入 Google Drive 資料夾連結")
+        }
+
+        val url = "$baseUrl/files".toHttpUrl().newBuilder()
+            .addQueryParameter("q", "'$folderId' in parents and mimeType = 'application/vnd.google-apps.folder'")
+            .addQueryParameter("key", apiKey)
+            .addQueryParameter("fields", "files(id,name,mimeType)")
+            .addQueryParameter("orderBy", "name")
+            .build()
+
+        return GET(url.toString(), headers)
     }
 
     override fun popularMangaParse(response: Response): MangasPage {
-        throw UnsupportedOperationException("Use search with folder URL")
+        val result = response.parseAs<DriveFilesResponse>()
+
+        val mangas = result.files.map { file ->
+            SManga.create().apply {
+                url = file.id
+                title = file.name
+                thumbnail_url = null
+            }
+        }
+
+        return MangasPage(mangas, false)
     }
 
     // =============================== Latest ===============================
@@ -62,20 +91,19 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
         if (apiKey.isBlank()) {
             throw Exception("請在擴充功能設定中輸入 Google Cloud API Key")
         }
-
-        var folderId = ""
-        filters.forEach { filter ->
-            if (filter is FolderUrlFilter && filter.state.isNotBlank()) {
-                folderId = extractFolderId(filter.state)
-            }
+        if (folderUrl.isBlank()) {
+            throw Exception("請在擴充功能設定中輸入 Google Drive 資料夾連結")
         }
 
-        if (folderId.isBlank()) {
-            throw Exception("請輸入 Google Drive 資料夾連結")
+        // Search by name within the folder
+        val queryCondition = if (query.isNotBlank()) {
+            "'$folderId' in parents and mimeType = 'application/vnd.google-apps.folder' and name contains '$query'"
+        } else {
+            "'$folderId' in parents and mimeType = 'application/vnd.google-apps.folder'"
         }
 
         val url = "$baseUrl/files".toHttpUrl().newBuilder()
-            .addQueryParameter("q", "'$folderId' in parents and mimeType = 'application/vnd.google-apps.folder'")
+            .addQueryParameter("q", queryCondition)
             .addQueryParameter("key", apiKey)
             .addQueryParameter("fields", "files(id,name,mimeType)")
             .addQueryParameter("orderBy", "name")
@@ -85,27 +113,12 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
     }
 
     override fun searchMangaParse(response: Response): MangasPage {
-        val result = response.parseAs<DriveFilesResponse>()
-
-        val mangas = result.files.map { file ->
-            SManga.create().apply {
-                url = file.id
-                title = file.name
-                thumbnail_url = null // Will be fetched in getMangaDetails
-            }
-        }
-
-        return MangasPage(mangas, false)
+        return popularMangaParse(response)
     }
 
     // =============================== Filters ==============================
 
-    override fun getFilterList(): FilterList = FilterList(
-        Filter.Header("輸入 Google Drive 資料夾連結"),
-        FolderUrlFilter()
-    )
-
-    class FolderUrlFilter : Filter.Text("資料夾連結")
+    override fun getFilterList(): FilterList = FilterList()
 
     // =========================== Manga Details ============================
 
@@ -194,8 +207,6 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
 
         // Check if it's a ZIP/CBZ file - return file info request
         if (fileName.lowercase().endsWith(".zip") || fileName.lowercase().endsWith(".cbz")) {
-            // For ZIP/CBZ, we return the download URL as a single page
-            // Mihon's reader should handle the archive
             val url = "$baseUrl/files/$fileId".toHttpUrl().newBuilder()
                 .addQueryParameter("key", apiKey)
                 .addQueryParameter("fields", "id,name,webContentLink")
@@ -220,9 +231,6 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
         // Check if this is a single file response (ZIP/CBZ)
         if (responseBody.contains("\"webContentLink\"") && !responseBody.contains("\"files\"")) {
             val file = json.decodeFromString(DriveFile.serializer(), responseBody)
-            // Return the direct download URL for the archive
-            // Note: Mihon may not support reading archives directly via URL
-            // In that case, users should use folder structure instead
             val downloadUrl = "$baseUrl/files/${file.id}?alt=media&key=$apiKey"
             return listOf(Page(0, "", downloadUrl))
         }
@@ -244,11 +252,7 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
     // ============================= Utilities ==============================
 
     private fun extractFolderId(url: String): String {
-        // Handle various Google Drive URL formats
-        // https://drive.google.com/drive/folders/FOLDER_ID
-        // https://drive.google.com/drive/folders/FOLDER_ID?usp=sharing
-        // https://drive.google.com/drive/u/0/folders/FOLDER_ID
-
+        if (url.isBlank()) return ""
         val regex = Regex("""folders/([a-zA-Z0-9_-]+)""")
         val match = regex.find(url)
         return match?.groupValues?.getOrNull(1) ?: url
@@ -276,9 +280,22 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
                 true
             }
         }.let { screen.addPreference(it) }
+
+        EditTextPreference(screen.context).apply {
+            key = FOLDER_URL_PREF
+            title = "Google Drive 資料夾連結"
+            summary = "輸入公開分享的 Google Drive 資料夾連結"
+            setDefaultValue("")
+
+            setOnPreferenceChangeListener { _, newValue ->
+                preferences.edit().putString(FOLDER_URL_PREF, newValue as String).apply()
+                true
+            }
+        }.let { screen.addPreference(it) }
     }
 
     companion object {
         private const val API_KEY_PREF = "api_key"
+        private const val FOLDER_URL_PREF = "folder_url"
     }
 }
