@@ -234,7 +234,7 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
         }
 
         val url = "$baseUrl/files".toHttpUrl().newBuilder()
-            .addQueryParameter("q", "'${manga.url}' in parents and (mimeType = 'application/vnd.google-apps.folder' or mimeType = 'application/zip' or mimeType = 'application/x-cbz' or mimeType = 'application/octet-stream')")
+            .addQueryParameter("q", "'${manga.url}' in parents and mimeType = 'application/vnd.google-apps.folder'")
             .addQueryParameter("key", apiKey)
             .addQueryParameter("fields", "files(id,name,mimeType)")
             .addQueryParameter("orderBy", "name desc")
@@ -247,15 +247,11 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
         val result = response.parseAs<DriveFilesResponse>()
 
         return result.files
-            .filter { file ->
-                file.mimeType == "application/vnd.google-apps.folder" ||
-                    file.name.lowercase().endsWith(".zip") ||
-                    file.name.lowercase().endsWith(".cbz")
-            }
+            .filter { it.mimeType == "application/vnd.google-apps.folder" }
             .mapIndexed { index, file ->
                 SChapter.create().apply {
-                    url = "${file.id}|${file.mimeType}|${file.name}"
-                    name = file.name.removeSuffix(".zip").removeSuffix(".cbz").removeSuffix(".ZIP").removeSuffix(".CBZ")
+                    url = file.id
+                    name = file.name
                     chapter_number = (result.files.size - index).toFloat()
                     date_upload = 0L
                 }
@@ -269,22 +265,8 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
             throw Exception("請在擴充功能設定中輸入 Google Cloud API Key")
         }
 
-        val parts = chapter.url.split("|")
-        val fileId = parts[0]
-        val fileName = parts.getOrNull(2) ?: ""
-
-        // Check if it's a ZIP/CBZ file - return file info request
-        if (fileName.lowercase().endsWith(".zip") || fileName.lowercase().endsWith(".cbz")) {
-            val url = "$baseUrl/files/$fileId".toHttpUrl().newBuilder()
-                .addQueryParameter("key", apiKey)
-                .addQueryParameter("fields", "id,name,webContentLink")
-                .build()
-            return GET(url.toString(), headers)
-        }
-
-        // For folder, list image files
         val url = "$baseUrl/files".toHttpUrl().newBuilder()
-            .addQueryParameter("q", "'$fileId' in parents and mimeType contains 'image/'")
+            .addQueryParameter("q", "'${chapter.url}' in parents and mimeType contains 'image/'")
             .addQueryParameter("key", apiKey)
             .addQueryParameter("fields", "files(id,name,mimeType)")
             .addQueryParameter("orderBy", "name")
@@ -294,15 +276,7 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
     }
 
     override fun pageListParse(response: Response): List<Page> {
-        val responseBody = response.body.string()
-
-        // Check if this is a single file response (ZIP/CBZ)
-        if (responseBody.contains("\"webContentLink\"") && !responseBody.contains("\"files\"")) {
-            val file = json.decodeFromString(DriveFile.serializer(), responseBody)
-            return parseZipFile(file.id)
-        }
-
-        val result = json.decodeFromString(DriveFilesResponse.serializer(), responseBody)
+        val result = response.parseAs<DriveFilesResponse>()
 
         return result.files
             .filter { it.mimeType.startsWith("image/") }
@@ -310,59 +284,6 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
             .mapIndexed { index, file ->
                 Page(index, "", buildImageUrl(file.id))
             }
-    }
-
-    private fun parseZipFile(fileId: String): List<Page> {
-        val downloadUrl = "$baseUrl/files/$fileId?alt=media&key=$apiKey"
-        val zipResponse = client.newCall(GET(downloadUrl, headers)).execute()
-
-        if (!zipResponse.isSuccessful) {
-            throw Exception("無法下載壓縮檔")
-        }
-
-        val pages = mutableListOf<Page>()
-        val zipBytes = zipResponse.body.bytes()
-
-        java.util.zip.ZipInputStream(java.io.ByteArrayInputStream(zipBytes)).use { zipStream ->
-            var entry = zipStream.nextEntry
-            val imageEntries = mutableListOf<Pair<String, ByteArray>>()
-
-            while (entry != null) {
-                val name = entry.name.lowercase()
-                val isImage = name.endsWith(".jpg") ||
-                    name.endsWith(".jpeg") ||
-                    name.endsWith(".png") ||
-                    name.endsWith(".gif") ||
-                    name.endsWith(".webp")
-                if (!entry.isDirectory && isImage) {
-                    val imageBytes = zipStream.readBytes()
-                    imageEntries.add(entry.name to imageBytes)
-                }
-                zipStream.closeEntry()
-                entry = zipStream.nextEntry
-            }
-
-            // Sort by filename and create pages
-            imageEntries
-                .sortedBy { it.first }
-                .forEachIndexed { index, (name, bytes) ->
-                    val mimeType = when {
-                        name.lowercase().endsWith(".png") -> "image/png"
-                        name.lowercase().endsWith(".gif") -> "image/gif"
-                        name.lowercase().endsWith(".webp") -> "image/webp"
-                        else -> "image/jpeg"
-                    }
-                    val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-                    val dataUri = "data:$mimeType;base64,$base64"
-                    pages.add(Page(index, "", dataUri))
-                }
-        }
-
-        if (pages.isEmpty()) {
-            throw Exception("壓縮檔內沒有圖片")
-        }
-
-        return pages
     }
 
     override fun imageUrlParse(response: Response): String {
