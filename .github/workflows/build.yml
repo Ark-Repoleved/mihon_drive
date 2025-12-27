@@ -51,12 +51,6 @@ jobs:
           tag_name: v${{ inputs.version }}
           name: Google Drive Extension v${{ inputs.version }}
           body: |
-            ## Google Drive Extension v${{ inputs.version }}
-            
-            ### 安裝說明
-            1. 下載下方的 APK 檔案
-            2. 安裝到你的 Android 裝置
-            3. 在 Mihon 中設定 API Key
             
             ### Installation
             1. Download the APK file below
@@ -69,3 +63,4 @@ jobs:
       - name: Clean up
         if: always()
         run: rm -f signingkey.jks
+
