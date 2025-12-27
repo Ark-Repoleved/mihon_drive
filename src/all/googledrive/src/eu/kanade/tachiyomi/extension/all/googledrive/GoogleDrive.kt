@@ -315,9 +315,8 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
     }
 
     private fun buildImageUrl(fileId: String): String {
-        // Use Google's CDN thumbnail URL - more stable and cached
-        // s0 = original size, s1600 = max 1600px
-        return "https://lh3.googleusercontent.com/d/$fileId=s0"
+        // Use newer Google Drive direct access format
+        return "https://drive.usercontent.google.com/download?id=$fileId&export=view"
     }
 
     private inline fun <reified T> Response.parseAs(): T {
