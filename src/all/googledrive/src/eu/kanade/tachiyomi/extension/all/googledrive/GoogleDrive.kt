@@ -329,8 +329,12 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
 
             while (entry != null) {
                 val name = entry.name.lowercase()
-                if (!entry.isDirectory && (name.endsWith(".jpg") || name.endsWith(".jpeg") ||
-                        name.endsWith(".png") || name.endsWith(".gif") || name.endsWith(".webp"))) {
+                val isImage = name.endsWith(".jpg") ||
+                    name.endsWith(".jpeg") ||
+                    name.endsWith(".png") ||
+                    name.endsWith(".gif") ||
+                    name.endsWith(".webp")
+                if (!entry.isDirectory && isImage) {
                     val imageBytes = zipStream.readBytes()
                     imageEntries.add(entry.name to imageBytes)
                 }
