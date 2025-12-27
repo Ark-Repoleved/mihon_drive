@@ -2,9 +2,12 @@ package eu.kanade.tachiyomi.extension.all.googledrive
 
 import android.app.Application
 import android.content.SharedPreferences
+import android.widget.Toast
 import androidx.preference.EditTextPreference
+import androidx.preference.Preference
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.network.GET
+import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
@@ -13,6 +16,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
 import kotlinx.serialization.json.Json
+import okhttp3.FormBody
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
@@ -32,8 +36,21 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
         Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
     }
 
-    private val apiKey: String
-        get() = preferences.getString(API_KEY_PREF, "") ?: ""
+    // OAuth 設定
+    private val clientId: String
+        get() = preferences.getString(CLIENT_ID_PREF, "") ?: ""
+
+    private var accessToken: String
+        get() = preferences.getString(ACCESS_TOKEN_PREF, "") ?: ""
+        set(value) = preferences.edit().putString(ACCESS_TOKEN_PREF, value).apply()
+
+    private var refreshToken: String
+        get() = preferences.getString(REFRESH_TOKEN_PREF, "") ?: ""
+        set(value) = preferences.edit().putString(REFRESH_TOKEN_PREF, value).apply()
+
+    private var tokenExpiry: Long
+        get() = preferences.getLong(TOKEN_EXPIRY_PREF, 0L)
+        set(value) = preferences.edit().putLong(TOKEN_EXPIRY_PREF, value).apply()
 
     private val folderUrl: String
         get() = preferences.getString(FOLDER_URL_PREF, "") ?: ""
@@ -41,11 +58,68 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
     private val folderId: String
         get() = extractFolderId(folderUrl)
 
+    private val isLoggedIn: Boolean
+        get() = accessToken.isNotBlank() && refreshToken.isNotBlank()
+
+    // ============================== Auth ================================
+
+    private fun getValidAccessToken(): String {
+        if (!isLoggedIn) {
+            throw Exception("請先登入 Google 帳號")
+        }
+
+        // Check if token is expired (with 5 min buffer)
+        if (System.currentTimeMillis() > tokenExpiry - 300000) {
+            refreshAccessToken()
+        }
+
+        return accessToken
+    }
+
+    private fun refreshAccessToken() {
+        if (refreshToken.isBlank()) {
+            throw Exception("請重新登入 Google 帳號")
+        }
+
+        val requestBody = FormBody.Builder()
+            .add("client_id", clientId)
+            .add("refresh_token", refreshToken)
+            .add("grant_type", "refresh_token")
+            .build()
+
+        val request = POST("https://oauth2.googleapis.com/token", body = requestBody)
+        val response = client.newCall(request).execute()
+
+        if (!response.isSuccessful) {
+            // Token refresh failed, clear tokens
+            accessToken = ""
+            refreshToken = ""
+            tokenExpiry = 0L
+            throw Exception("Token 已過期，請重新登入")
+        }
+
+        val tokenResponse = json.decodeFromString(TokenResponse.serializer(), response.body.string())
+        accessToken = tokenResponse.accessToken
+        tokenExpiry = System.currentTimeMillis() + (tokenResponse.expiresIn * 1000L)
+
+        // Refresh token is only returned on initial auth, not on refresh
+        if (tokenResponse.refreshToken != null) {
+            refreshToken = tokenResponse.refreshToken
+        }
+    }
+
+    private fun buildAuthenticatedRequest(url: String): Request {
+        val token = getValidAccessToken()
+        return GET(url) {
+            addHeader("Authorization", "Bearer $token")
+        }
+    }
+
     // ============================== Popular ===============================
 
     override fun popularMangaRequest(page: Int): Request {
-        if (apiKey.isBlank()) {
-            throw Exception("請在擴充功能設定中輸入 Google Cloud API Key")
+        if (!isLoggedIn) {
+            throw Exception("請先登入 Google 帳號（在擴充功能設定中）")
         }
         if (folderUrl.isBlank()) {
             throw Exception("請在擴充功能設定中輸入 Google Drive 資料夾連結")
@@ -53,12 +127,11 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
 
         val url = "$baseUrl/files".toHttpUrl().newBuilder()
             .addQueryParameter("q", "'$folderId' in parents and mimeType = 'application/vnd.google-apps.folder'")
-            .addQueryParameter("key", apiKey)
             .addQueryParameter("fields", "files(id,name,mimeType)")
             .addQueryParameter("orderBy", "name")
             .build()
 
-        return GET(url.toString(), headers)
+        return buildAuthenticatedRequest(url.toString())
     }
 
     override fun popularMangaParse(response: Response): MangasPage {
@@ -88,14 +161,13 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
     // =============================== Search ===============================
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        if (apiKey.isBlank()) {
-            throw Exception("請在擴充功能設定中輸入 Google Cloud API Key")
+        if (!isLoggedIn) {
+            throw Exception("請先登入 Google 帳號（在擴充功能設定中）")
         }
         if (folderUrl.isBlank()) {
             throw Exception("請在擴充功能設定中輸入 Google Drive 資料夾連結")
         }
 
-        // Search by name within the folder
         val queryCondition = if (query.isNotBlank()) {
             "'$folderId' in parents and mimeType = 'application/vnd.google-apps.folder' and name contains '$query'"
         } else {
@@ -104,12 +176,11 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
 
         val url = "$baseUrl/files".toHttpUrl().newBuilder()
             .addQueryParameter("q", queryCondition)
-            .addQueryParameter("key", apiKey)
             .addQueryParameter("fields", "files(id,name,mimeType)")
             .addQueryParameter("orderBy", "name")
             .build()
 
-        return GET(url.toString(), headers)
+        return buildAuthenticatedRequest(url.toString())
     }
 
     override fun searchMangaParse(response: Response): MangasPage {
@@ -127,18 +198,16 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
     }
 
     override fun mangaDetailsRequest(manga: SManga): Request {
-        if (apiKey.isBlank()) {
-            throw Exception("請在擴充功能設定中輸入 Google Cloud API Key")
+        if (!isLoggedIn) {
+            throw Exception("請先登入 Google 帳號")
         }
 
-        // Fetch cover image and ComicInfo.xml from manga folder
         val url = "$baseUrl/files".toHttpUrl().newBuilder()
             .addQueryParameter("q", "'${manga.url}' in parents and (name contains 'cover' or name = 'ComicInfo.xml')")
-            .addQueryParameter("key", apiKey)
             .addQueryParameter("fields", "files(id,name,mimeType)")
             .build()
 
-        return GET(url.toString(), headers)
+        return buildAuthenticatedRequest(url.toString())
     }
 
     override fun mangaDetailsParse(response: Response): SManga {
@@ -150,8 +219,8 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
         val comicInfoFile = result.files.firstOrNull { it.name == "ComicInfo.xml" }
         if (comicInfoFile != null) {
             try {
-                val xmlUrl = "$baseUrl/files/${comicInfoFile.id}?alt=media&key=$apiKey"
-                val xmlResponse = client.newCall(GET(xmlUrl, headers)).execute()
+                val xmlUrl = "$baseUrl/files/${comicInfoFile.id}?alt=media"
+                val xmlResponse = client.newCall(buildAuthenticatedRequest(xmlUrl)).execute()
                 if (xmlResponse.isSuccessful) {
                     comicInfo = parseComicInfo(xmlResponse.body.string())
                 }
@@ -169,7 +238,6 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
         return SManga.create().apply {
             initialized = true
 
-            // Use ComicInfo data if available
             if (comicInfo != null) {
                 author = comicInfo.writer.takeIf { it.isNotBlank() }
                 artist = comicInfo.penciller.takeIf { it.isNotBlank() }
@@ -191,23 +259,14 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
     }
 
     private fun parseComicInfo(xml: String): ComicInfo {
-        var series = ""
-        var summary = ""
-        var writer = ""
-        var penciller = ""
-        var genre = ""
-        var publishingStatus = ""
+        val series = extractXmlTag(xml, "Series")
+        val summary = extractXmlTag(xml, "Summary")
+        val writer = extractXmlTag(xml, "Writer")
+        val penciller = extractXmlTag(xml, "Penciller")
+        val genre = extractXmlTag(xml, "Genre")
 
-        // Simple XML parsing without external library
-        series = extractXmlTag(xml, "Series")
-        summary = extractXmlTag(xml, "Summary")
-        writer = extractXmlTag(xml, "Writer")
-        penciller = extractXmlTag(xml, "Penciller")
-        genre = extractXmlTag(xml, "Genre")
-
-        // Try to get Tachiyomi-specific status
         val statusMatch = Regex("""<ty:PublishingStatusTachiyomi[^>]*>([^<]*)</ty:PublishingStatusTachiyomi>""").find(xml)
-        publishingStatus = statusMatch?.groupValues?.getOrNull(1) ?: ""
+        val publishingStatus = statusMatch?.groupValues?.getOrNull(1) ?: ""
 
         return ComicInfo(series, summary, writer, penciller, genre, publishingStatus)
     }
@@ -229,18 +288,17 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
     // ============================== Chapters ==============================
 
     override fun chapterListRequest(manga: SManga): Request {
-        if (apiKey.isBlank()) {
-            throw Exception("請在擴充功能設定中輸入 Google Cloud API Key")
+        if (!isLoggedIn) {
+            throw Exception("請先登入 Google 帳號")
         }
 
         val url = "$baseUrl/files".toHttpUrl().newBuilder()
             .addQueryParameter("q", "'${manga.url}' in parents and mimeType = 'application/vnd.google-apps.folder'")
-            .addQueryParameter("key", apiKey)
             .addQueryParameter("fields", "files(id,name,mimeType)")
             .addQueryParameter("orderBy", "name desc")
             .build()
 
-        return GET(url.toString(), headers)
+        return buildAuthenticatedRequest(url.toString())
     }
 
     override fun chapterListParse(response: Response): List<SChapter> {
@@ -261,19 +319,18 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
     // =============================== Pages ================================
 
     override fun pageListRequest(chapter: SChapter): Request {
-        if (apiKey.isBlank()) {
-            throw Exception("請在擴充功能設定中輸入 Google Cloud API Key")
+        if (!isLoggedIn) {
+            throw Exception("請先登入 Google 帳號")
         }
 
         val url = "$baseUrl/files".toHttpUrl().newBuilder()
             .addQueryParameter("q", "'${chapter.url}' in parents and mimeType contains 'image/'")
-            .addQueryParameter("key", apiKey)
             .addQueryParameter("fields", "nextPageToken,files(id,name,mimeType)")
             .addQueryParameter("orderBy", "name")
             .addQueryParameter("pageSize", "1000")
             .build()
 
-        return GET(url.toString(), headers)
+        return buildAuthenticatedRequest(url.toString())
     }
 
     override fun pageListParse(response: Response): List<Page> {
@@ -282,14 +339,13 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
 
         allFiles.addAll(result.files.filter { it.mimeType.startsWith("image/") })
 
-        // Fetch additional pages if needed
         while (result.nextPageToken != null) {
             val requestUrl = response.request.url
             val nextUrl = requestUrl.newBuilder()
                 .setQueryParameter("pageToken", result.nextPageToken)
                 .build()
 
-            val nextResponse = client.newCall(GET(nextUrl.toString(), headers)).execute()
+            val nextResponse = client.newCall(buildAuthenticatedRequest(nextUrl.toString())).execute()
             result = nextResponse.parseAs<DriveFilesResponse>()
             allFiles.addAll(result.files.filter { it.mimeType.startsWith("image/") })
         }
@@ -315,8 +371,6 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
     }
 
     private fun buildImageUrl(fileId: String): String {
-        // Use Google's CDN thumbnail URL - more stable and cached
-        // s0 = original size, s1600 = max 1600px
         return "https://lh3.googleusercontent.com/d/$fileId=s0"
     }
 
@@ -327,22 +381,40 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
     // ============================== Settings ==============================
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
+        // OAuth Client ID
         EditTextPreference(screen.context).apply {
-            key = API_KEY_PREF
-            title = "Google Cloud API Key"
-            summary = "輸入您的 Google Cloud API Key"
+            key = CLIENT_ID_PREF
+            title = "OAuth Client ID"
+            summary = "輸入 Google Cloud OAuth 2.0 Client ID"
             setDefaultValue("")
 
             setOnPreferenceChangeListener { _, newValue ->
-                preferences.edit().putString(API_KEY_PREF, newValue as String).apply()
+                preferences.edit().putString(CLIENT_ID_PREF, newValue as String).apply()
                 true
             }
         }.let { screen.addPreference(it) }
 
+        // Login button
+        Preference(screen.context).apply {
+            key = "oauth_login"
+            title = if (isLoggedIn) "✓ 已登入 Google 帳號" else "登入 Google 帳號"
+            summary = if (isLoggedIn) {
+                "點擊以重新登入或登出"
+            } else {
+                "點擊以開始 OAuth 登入流程"
+            }
+
+            setOnPreferenceClickListener {
+                startOAuthLogin(screen)
+                true
+            }
+        }.let { screen.addPreference(it) }
+
+        // Folder URL
         EditTextPreference(screen.context).apply {
             key = FOLDER_URL_PREF
             title = "Google Drive 資料夾連結"
-            summary = "輸入公開分享的 Google Drive 資料夾連結"
+            summary = "輸入 Google Drive 資料夾連結"
             setDefaultValue("")
 
             setOnPreferenceChangeListener { _, newValue ->
@@ -352,8 +424,120 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
         }.let { screen.addPreference(it) }
     }
 
+    private fun startOAuthLogin(screen: PreferenceScreen) {
+        val context = screen.context
+
+        if (clientId.isBlank()) {
+            Toast.makeText(context, "請先輸入 OAuth Client ID", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        // Request device code
+        val requestBody = FormBody.Builder()
+            .add("client_id", clientId)
+            .add("scope", "https://www.googleapis.com/auth/drive.readonly")
+            .build()
+
+        Thread {
+            try {
+                val deviceCodeRequest = POST(
+                    "https://oauth2.googleapis.com/device/code",
+                    body = requestBody
+                )
+                val deviceCodeResponse = client.newCall(deviceCodeRequest).execute()
+
+                if (!deviceCodeResponse.isSuccessful) {
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        Toast.makeText(context, "無法取得驗證碼", Toast.LENGTH_LONG).show()
+                    }
+                    return@Thread
+                }
+
+                val deviceCode = json.decodeFromString(
+                    DeviceCodeResponse.serializer(),
+                    deviceCodeResponse.body.string()
+                )
+
+                // Show user code and URL
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    Toast.makeText(
+                        context,
+                        "請在瀏覽器開啟 ${deviceCode.verificationUrl}\n並輸入驗證碼: ${deviceCode.userCode}",
+                        Toast.LENGTH_LONG
+                    ).show()
+
+                    // Copy to clipboard
+                    val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                        as android.content.ClipboardManager
+                    val clip = android.content.ClipData.newPlainText("驗證碼", deviceCode.userCode)
+                    clipboard.setPrimaryClip(clip)
+
+                    Toast.makeText(context, "驗證碼已複製到剪貼簿", Toast.LENGTH_SHORT).show()
+                }
+
+                // Poll for token
+                pollForToken(deviceCode, context)
+            } catch (e: Exception) {
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    Toast.makeText(context, "登入失敗: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }.start()
+    }
+
+    private fun pollForToken(deviceCode: DeviceCodeResponse, context: android.content.Context) {
+        val pollInterval = (deviceCode.interval * 1000L).coerceAtLeast(5000L)
+        val expiryTime = System.currentTimeMillis() + (deviceCode.expiresIn * 1000L)
+
+        while (System.currentTimeMillis() < expiryTime) {
+            Thread.sleep(pollInterval)
+
+            val tokenRequestBody = FormBody.Builder()
+                .add("client_id", clientId)
+                .add("device_code", deviceCode.deviceCode)
+                .add("grant_type", "urn:ietf:params:oauth:grant-type:device_code")
+                .build()
+
+            val tokenRequest = POST("https://oauth2.googleapis.com/token", body = tokenRequestBody)
+            val tokenResponse = client.newCall(tokenRequest).execute()
+            val responseBody = tokenResponse.body.string()
+
+            if (tokenResponse.isSuccessful) {
+                val token = json.decodeFromString(TokenResponse.serializer(), responseBody)
+                accessToken = token.accessToken
+                refreshToken = token.refreshToken ?: ""
+                tokenExpiry = System.currentTimeMillis() + (token.expiresIn * 1000L)
+
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    Toast.makeText(context, "登入成功！", Toast.LENGTH_LONG).show()
+                }
+                return
+            } else {
+                // Check if still pending
+                try {
+                    val error = json.decodeFromString(OAuthErrorResponse.serializer(), responseBody)
+                    if (error.error != "authorization_pending" && error.error != "slow_down") {
+                        android.os.Handler(android.os.Looper.getMainLooper()).post {
+                            Toast.makeText(context, "登入失敗: ${error.errorDescription}", Toast.LENGTH_LONG).show()
+                        }
+                        return
+                    }
+                } catch (_: Exception) {
+                    // Continue polling
+                }
+            }
+        }
+
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            Toast.makeText(context, "驗證碼已過期，請重試", Toast.LENGTH_LONG).show()
+        }
+    }
+
     companion object {
-        private const val API_KEY_PREF = "api_key"
+        private const val CLIENT_ID_PREF = "oauth_client_id"
+        private const val ACCESS_TOKEN_PREF = "oauth_access_token"
+        private const val REFRESH_TOKEN_PREF = "oauth_refresh_token"
+        private const val TOKEN_EXPIRY_PREF = "oauth_token_expiry"
         private const val FOLDER_URL_PREF = "folder_url"
     }
 }
