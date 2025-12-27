@@ -261,47 +261,44 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
     // =============================== Pages ================================
 
     override fun pageListRequest(chapter: SChapter): Request {
-        // This is a dummy request, actual fetching happens in getPageList
-        return GET("$baseUrl/files?key=$apiKey", headers)
-    }
-
-    override fun getPageList(chapter: SChapter): List<Page> {
         if (apiKey.isBlank()) {
             throw Exception("請在擴充功能設定中輸入 Google Cloud API Key")
         }
 
+        val url = "$baseUrl/files".toHttpUrl().newBuilder()
+            .addQueryParameter("q", "'${chapter.url}' in parents and mimeType contains 'image/'")
+            .addQueryParameter("key", apiKey)
+            .addQueryParameter("fields", "nextPageToken,files(id,name,mimeType)")
+            .addQueryParameter("orderBy", "name")
+            .addQueryParameter("pageSize", "1000")
+            .build()
+
+        return GET(url.toString(), headers)
+    }
+
+    override fun pageListParse(response: Response): List<Page> {
         val allFiles = mutableListOf<DriveFile>()
-        var pageToken: String? = null
+        var result = response.parseAs<DriveFilesResponse>()
 
-        // Fetch all pages (Google Drive API returns max 100 per request)
-        do {
-            val urlBuilder = "$baseUrl/files".toHttpUrl().newBuilder()
-                .addQueryParameter("q", "'${chapter.url}' in parents and mimeType contains 'image/'")
-                .addQueryParameter("key", apiKey)
-                .addQueryParameter("fields", "nextPageToken,files(id,name,mimeType)")
-                .addQueryParameter("orderBy", "name")
-                .addQueryParameter("pageSize", "1000")
+        allFiles.addAll(result.files.filter { it.mimeType.startsWith("image/") })
 
-            if (pageToken != null) {
-                urlBuilder.addQueryParameter("pageToken", pageToken)
-            }
+        // Fetch additional pages if needed
+        while (result.nextPageToken != null) {
+            val requestUrl = response.request.url
+            val nextUrl = requestUrl.newBuilder()
+                .setQueryParameter("pageToken", result.nextPageToken)
+                .build()
 
-            val response = client.newCall(GET(urlBuilder.build().toString(), headers)).execute()
-            val result = response.parseAs<DriveFilesResponse>()
-
+            val nextResponse = client.newCall(GET(nextUrl.toString(), headers)).execute()
+            result = nextResponse.parseAs<DriveFilesResponse>()
             allFiles.addAll(result.files.filter { it.mimeType.startsWith("image/") })
-            pageToken = result.nextPageToken
-        } while (pageToken != null)
+        }
 
         return allFiles
             .sortedBy { it.name }
             .mapIndexed { index, file ->
                 Page(index, "", buildImageUrl(file.id))
             }
-    }
-
-    override fun pageListParse(response: Response): List<Page> {
-        throw UnsupportedOperationException("Not used")
     }
 
     override fun imageUrlParse(response: Response): String {
