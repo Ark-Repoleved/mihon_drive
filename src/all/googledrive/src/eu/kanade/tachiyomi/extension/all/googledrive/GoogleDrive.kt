@@ -131,11 +131,11 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
             throw Exception("請在擴充功能設定中輸入 Google Cloud API Key")
         }
 
-        // Fetch cover image from manga folder
+        // Fetch cover image and ComicInfo.xml from manga folder
         val url = "$baseUrl/files".toHttpUrl().newBuilder()
-            .addQueryParameter("q", "'${manga.url}' in parents and name contains 'cover'")
+            .addQueryParameter("q", "'${manga.url}' in parents and (name contains 'cover' or name = 'ComicInfo.xml')")
             .addQueryParameter("key", apiKey)
-            .addQueryParameter("fields", "files(id,name,mimeType,webContentLink)")
+            .addQueryParameter("fields", "files(id,name,mimeType)")
             .build()
 
         return GET(url.toString(), headers)
@@ -144,19 +144,87 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
     override fun mangaDetailsParse(response: Response): SManga {
         val result = response.parseAs<DriveFilesResponse>()
 
+        var comicInfo: ComicInfo? = null
+
+        // Find and fetch ComicInfo.xml
+        val comicInfoFile = result.files.firstOrNull { it.name == "ComicInfo.xml" }
+        if (comicInfoFile != null) {
+            try {
+                val xmlUrl = "$baseUrl/files/${comicInfoFile.id}?alt=media&key=$apiKey"
+                val xmlResponse = client.newCall(GET(xmlUrl, headers)).execute()
+                if (xmlResponse.isSuccessful) {
+                    comicInfo = parseComicInfo(xmlResponse.body.string())
+                }
+            } catch (_: Exception) {
+                // Ignore parsing errors
+            }
+        }
+
+        // Find cover image
+        val coverFile = result.files.firstOrNull { file ->
+            file.name.lowercase().startsWith("cover") &&
+                file.mimeType.startsWith("image/")
+        }
+
         return SManga.create().apply {
             initialized = true
-            status = SManga.UNKNOWN
 
-            // Find cover image
-            val coverFile = result.files.firstOrNull { file ->
-                file.name.lowercase().startsWith("cover") &&
-                    file.mimeType.startsWith("image/")
+            // Use ComicInfo data if available
+            if (comicInfo != null) {
+                author = comicInfo.writer.takeIf { it.isNotBlank() }
+                artist = comicInfo.penciller.takeIf { it.isNotBlank() }
+                description = comicInfo.summary.takeIf { it.isNotBlank() }
+                genre = comicInfo.genre.takeIf { it.isNotBlank() }
+                status = when (comicInfo.publishingStatus.lowercase()) {
+                    "ongoing" -> SManga.ONGOING
+                    "completed", "ended" -> SManga.COMPLETED
+                    "hiatus" -> SManga.ON_HIATUS
+                    "cancelled", "canceled" -> SManga.CANCELLED
+                    else -> SManga.UNKNOWN
+                }
+            } else {
+                status = SManga.UNKNOWN
             }
 
             thumbnail_url = coverFile?.let { buildImageUrl(it.id) }
         }
     }
+
+    private fun parseComicInfo(xml: String): ComicInfo {
+        var series = ""
+        var summary = ""
+        var writer = ""
+        var penciller = ""
+        var genre = ""
+        var publishingStatus = ""
+
+        // Simple XML parsing without external library
+        series = extractXmlTag(xml, "Series")
+        summary = extractXmlTag(xml, "Summary")
+        writer = extractXmlTag(xml, "Writer")
+        penciller = extractXmlTag(xml, "Penciller")
+        genre = extractXmlTag(xml, "Genre")
+
+        // Try to get Tachiyomi-specific status
+        val statusMatch = Regex("""<ty:PublishingStatusTachiyomi[^>]*>([^<]*)</ty:PublishingStatusTachiyomi>""").find(xml)
+        publishingStatus = statusMatch?.groupValues?.getOrNull(1) ?: ""
+
+        return ComicInfo(series, summary, writer, penciller, genre, publishingStatus)
+    }
+
+    private fun extractXmlTag(xml: String, tagName: String): String {
+        val regex = Regex("""<$tagName>([^<]*)</$tagName>""")
+        return regex.find(xml)?.groupValues?.getOrNull(1) ?: ""
+    }
+
+    private data class ComicInfo(
+        val series: String,
+        val summary: String,
+        val writer: String,
+        val penciller: String,
+        val genre: String,
+        val publishingStatus: String
+    )
 
     // ============================== Chapters ==============================
 
