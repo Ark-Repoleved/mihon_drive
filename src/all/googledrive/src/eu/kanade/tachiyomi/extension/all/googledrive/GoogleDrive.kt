@@ -1,7 +1,10 @@
 package eu.kanade.tachiyomi.extension.all.googledrive
 
-import android.app.Application
-import android.content.SharedPreferences
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.widget.Toast
 import androidx.preference.EditTextPreference
 import androidx.preference.Preference
@@ -17,6 +20,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
 import kotlinx.serialization.json.Json
 import okhttp3.FormBody
+import okhttp3.Headers
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
@@ -32,8 +36,12 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
 
     private val json = Json { ignoreUnknownKeys = true }
 
-    private val preferences: SharedPreferences by lazy {
-        Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+    private val context: Context by lazy {
+        Injekt.get<android.app.Application>()
+    }
+
+    private val preferences: android.content.SharedPreferences by lazy {
+        context.getSharedPreferences("source_$id", 0x0000)
     }
 
     // OAuth 設定
@@ -110,9 +118,11 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
 
     private fun buildAuthenticatedRequest(url: String): Request {
         val token = getValidAccessToken()
-        return GET(url) {
-            addHeader("Authorization", "Bearer $token")
-        }
+        val authHeaders = Headers.Builder()
+            .addAll(headers)
+            .add("Authorization", "Bearer $token")
+            .build()
+        return GET(url, authHeaders)
     }
 
     // ============================== Popular ===============================
@@ -447,7 +457,7 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
                 val deviceCodeResponse = client.newCall(deviceCodeRequest).execute()
 
                 if (!deviceCodeResponse.isSuccessful) {
-                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    Handler(Looper.getMainLooper()).post {
                         Toast.makeText(context, "無法取得驗證碼", Toast.LENGTH_LONG).show()
                     }
                     return@Thread
@@ -459,7 +469,7 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
                 )
 
                 // Show user code and URL
-                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                Handler(Looper.getMainLooper()).post {
                     Toast.makeText(
                         context,
                         "請在瀏覽器開啟 ${deviceCode.verificationUrl}\n並輸入驗證碼: ${deviceCode.userCode}",
@@ -467,9 +477,9 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
                     ).show()
 
                     // Copy to clipboard
-                    val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
-                        as android.content.ClipboardManager
-                    val clip = android.content.ClipData.newPlainText("驗證碼", deviceCode.userCode)
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE)
+                        as ClipboardManager
+                    val clip = ClipData.newPlainText("驗證碼", deviceCode.userCode)
                     clipboard.setPrimaryClip(clip)
 
                     Toast.makeText(context, "驗證碼已複製到剪貼簿", Toast.LENGTH_SHORT).show()
@@ -478,7 +488,7 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
                 // Poll for token
                 pollForToken(deviceCode, context)
             } catch (e: Exception) {
-                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                Handler(Looper.getMainLooper()).post {
                     Toast.makeText(context, "登入失敗: ${e.message}", Toast.LENGTH_LONG).show()
                 }
             }
@@ -508,7 +518,7 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
                 refreshToken = token.refreshToken ?: ""
                 tokenExpiry = System.currentTimeMillis() + (token.expiresIn * 1000L)
 
-                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                Handler(Looper.getMainLooper()).post {
                     Toast.makeText(context, "登入成功！", Toast.LENGTH_LONG).show()
                 }
                 return
@@ -517,7 +527,7 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
                 try {
                     val error = json.decodeFromString(OAuthErrorResponse.serializer(), responseBody)
                     if (error.error != "authorization_pending" && error.error != "slow_down") {
-                        android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        Handler(Looper.getMainLooper()).post {
                             Toast.makeText(context, "登入失敗: ${error.errorDescription}", Toast.LENGTH_LONG).show()
                         }
                         return
@@ -528,7 +538,7 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
             }
         }
 
-        android.os.Handler(android.os.Looper.getMainLooper()).post {
+        Handler(Looper.getMainLooper()).post {
             Toast.makeText(context, "驗證碼已過期，請重試", Toast.LENGTH_LONG).show()
         }
     }
