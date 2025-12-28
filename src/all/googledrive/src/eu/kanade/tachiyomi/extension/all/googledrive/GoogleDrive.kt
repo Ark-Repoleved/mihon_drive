@@ -341,15 +341,13 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
     }
 
     private fun buildImageUrl(fileId: String, mimeType: String? = null): String {
-        // Use newer Google Drive direct access format
-        var url = "https://drive.usercontent.google.com/download?id=$fileId&export=view"
-
-        // Append fake extension for video files so Mihon recognizes them
-        if (mimeType?.startsWith("video/") == true) {
-            url += "&.mp4"
+        return if (mimeType?.startsWith("video/") == true) {
+            // Use Google Drive preview format for videos (works in WebView)
+            "https://drive.google.com/file/d/$fileId/preview"
+        } else {
+            // Use direct download format for images
+            "https://drive.usercontent.google.com/download?id=$fileId&export=view"
         }
-
-        return url
     }
 
     private fun isMediaFile(mimeType: String): Boolean {
