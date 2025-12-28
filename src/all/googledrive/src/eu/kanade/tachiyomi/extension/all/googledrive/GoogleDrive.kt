@@ -299,7 +299,7 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
         return allFiles
             .sortedBy { it.name }
             .mapIndexed { index, file ->
-                Page(index, "", buildImageUrl(file.id))
+                Page(index, "", buildImageUrl(file.id, file.mimeType))
             }
     }
 
@@ -340,9 +340,16 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
         return match?.groupValues?.getOrNull(1) ?: url
     }
 
-    private fun buildImageUrl(fileId: String): String {
+    private fun buildImageUrl(fileId: String, mimeType: String? = null): String {
         // Use newer Google Drive direct access format
-        return "https://drive.usercontent.google.com/download?id=$fileId&export=view"
+        var url = "https://drive.usercontent.google.com/download?id=$fileId&export=view"
+        
+        // Append fake extension for video files so Mihon recognizes them
+        if (mimeType?.startsWith("video/") == true) {
+            url += "&.mp4"
+        }
+        
+        return url
     }
 
     private fun isMediaFile(mimeType: String): Boolean {
