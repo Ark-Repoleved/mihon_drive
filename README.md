@@ -27,7 +27,7 @@ A custom Mihon (Tachiyomi) extension that uses Google Drive as a manga source.
 │   ├── 📁 Chapter 1/
 │   │   ├── 001.jpg
 │   │   └── ...
-│   └── 📁 Chapter 2
+│   └── 📁 Chapter 2/
 └── 📁 Manga B
     └── ...
 ```
@@ -58,4 +58,5 @@ A custom Mihon (Tachiyomi) extension that uses Google Drive as a manga source.
 ```
 
 APK will be generated at `src/all/googledrive/build/outputs/apk/debug/`
+
 
