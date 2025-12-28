@@ -343,7 +343,7 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
     private fun buildImageUrl(fileId: String, mimeType: String? = null): String {
         // For video files, use API format for direct stream
         if (mimeType?.startsWith("video/") == true) {
-            return "https://www.googleapis.com/drive/v3/files/$fileId?alt=media&key=$apiKey"
+            return "https://www.googleapis.com/drive/v3/files/$fileId?alt=media&key=$apiKey&.mp4"
         }
         // For images, use the CDN format
         return "https://drive.usercontent.google.com/download?id=$fileId&export=view"
