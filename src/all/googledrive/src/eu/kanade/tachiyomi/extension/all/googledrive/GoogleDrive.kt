@@ -341,13 +341,12 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
     }
 
     private fun buildImageUrl(fileId: String, mimeType: String? = null): String {
-        return if (mimeType?.startsWith("video/") == true) {
-            // Use direct download link for videos + fake extension
-            "https://drive.google.com/uc?export=download&id=$fileId&.mp4"
-        } else {
-            // Use direct download format for images
-            "https://drive.usercontent.google.com/download?id=$fileId&export=view"
+        // For video files, use API format for direct stream
+        if (mimeType?.startsWith("video/") == true) {
+            return "https://www.googleapis.com/drive/v3/files/$fileId?alt=media&key=$apiKey"
         }
+        // For images, use the CDN format
+        return "https://drive.usercontent.google.com/download?id=$fileId&export=view"
     }
 
     private fun isMediaFile(mimeType: String): Boolean {
