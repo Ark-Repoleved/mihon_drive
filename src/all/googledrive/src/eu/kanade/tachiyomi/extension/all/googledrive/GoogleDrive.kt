@@ -268,7 +268,7 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
         }
 
         val url = "$baseUrl/files".toHttpUrl().newBuilder()
-            .addQueryParameter("q", "'${chapter.url}' in parents and mimeType contains 'image/'")
+            .addQueryParameter("q", "'${chapter.url}' in parents and (mimeType contains 'image/' or mimeType contains 'video/')")
             .addQueryParameter("key", apiKey)
             .addQueryParameter("fields", "nextPageToken,files(id,name,mimeType)")
             .addQueryParameter("orderBy", "name")
@@ -282,7 +282,7 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
         val allFiles = mutableListOf<DriveFile>()
         var result = response.parseAs<DriveFilesResponse>()
 
-        allFiles.addAll(result.files.filter { it.mimeType.startsWith("image/") })
+        allFiles.addAll(result.files.filter { isMediaFile(it.mimeType) })
 
         // Fetch additional pages if needed
         while (result.nextPageToken != null) {
@@ -293,7 +293,7 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
 
             val nextResponse = client.newCall(GET(nextUrl.toString(), headers)).execute()
             result = nextResponse.parseAs<DriveFilesResponse>()
-            allFiles.addAll(result.files.filter { it.mimeType.startsWith("image/") })
+            allFiles.addAll(result.files.filter { isMediaFile(it.mimeType) })
         }
 
         return allFiles
@@ -343,6 +343,10 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
     private fun buildImageUrl(fileId: String): String {
         // Use newer Google Drive direct access format
         return "https://drive.usercontent.google.com/download?id=$fileId&export=view"
+    }
+
+    private fun isMediaFile(mimeType: String): Boolean {
+        return mimeType.startsWith("image/") || mimeType.startsWith("video/")
     }
 
     private inline fun <reified T> Response.parseAs(): T {
