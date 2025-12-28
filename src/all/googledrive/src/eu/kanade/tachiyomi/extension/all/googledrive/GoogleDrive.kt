@@ -54,17 +54,18 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
         val url = "$baseUrl/files".toHttpUrl().newBuilder()
             .addQueryParameter("q", "'$folderId' in parents and mimeType = 'application/vnd.google-apps.folder'")
             .addQueryParameter("key", apiKey)
-            .addQueryParameter("fields", "files(id,name,mimeType)")
+            .addQueryParameter("fields", "nextPageToken,files(id,name,mimeType)")
             .addQueryParameter("orderBy", "name")
+            .addQueryParameter("pageSize", "1000")
             .build()
 
         return GET(url.toString(), headers)
     }
 
     override fun popularMangaParse(response: Response): MangasPage {
-        val result = response.parseAs<DriveFilesResponse>()
+        val allFiles = fetchAllFiles(response)
 
-        val mangas = result.files.map { file ->
+        val mangas = allFiles.map { file ->
             SManga.create().apply {
                 url = file.id
                 title = file.name
@@ -105,8 +106,9 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
         val url = "$baseUrl/files".toHttpUrl().newBuilder()
             .addQueryParameter("q", queryCondition)
             .addQueryParameter("key", apiKey)
-            .addQueryParameter("fields", "files(id,name,mimeType)")
+            .addQueryParameter("fields", "nextPageToken,files(id,name,mimeType)")
             .addQueryParameter("orderBy", "name")
+            .addQueryParameter("pageSize", "1000")
             .build()
 
         return GET(url.toString(), headers)
@@ -236,26 +238,26 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
         val url = "$baseUrl/files".toHttpUrl().newBuilder()
             .addQueryParameter("q", "'${manga.url}' in parents and mimeType = 'application/vnd.google-apps.folder'")
             .addQueryParameter("key", apiKey)
-            .addQueryParameter("fields", "files(id,name,mimeType)")
+            .addQueryParameter("fields", "nextPageToken,files(id,name,mimeType)")
             .addQueryParameter("orderBy", "name desc")
+            .addQueryParameter("pageSize", "1000")
             .build()
 
         return GET(url.toString(), headers)
     }
 
     override fun chapterListParse(response: Response): List<SChapter> {
-        val result = response.parseAs<DriveFilesResponse>()
-
-        return result.files
+        val allFiles = fetchAllFiles(response)
             .filter { it.mimeType == "application/vnd.google-apps.folder" }
-            .mapIndexed { index, file ->
-                SChapter.create().apply {
-                    url = file.id
-                    name = file.name
-                    chapter_number = (result.files.size - index).toFloat()
-                    date_upload = 0L
-                }
+
+        return allFiles.mapIndexed { index, file ->
+            SChapter.create().apply {
+                url = file.id
+                name = file.name
+                chapter_number = (allFiles.size - index).toFloat()
+                date_upload = 0L
             }
+        }
     }
 
     // =============================== Pages ================================
@@ -306,6 +308,30 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
     }
 
     // ============================= Utilities ==============================
+
+    /**
+     * Fetch all files with pagination support
+     */
+    private fun fetchAllFiles(response: Response): List<DriveFile> {
+        val allFiles = mutableListOf<DriveFile>()
+        var result = response.parseAs<DriveFilesResponse>()
+
+        allFiles.addAll(result.files)
+
+        // Fetch additional pages if needed
+        while (result.nextPageToken != null) {
+            val requestUrl = response.request.url
+            val nextUrl = requestUrl.newBuilder()
+                .setQueryParameter("pageToken", result.nextPageToken)
+                .build()
+
+            val nextResponse = client.newCall(GET(nextUrl.toString(), headers)).execute()
+            result = nextResponse.parseAs<DriveFilesResponse>()
+            allFiles.addAll(result.files)
+        }
+
+        return allFiles
+    }
 
     private fun extractFolderId(url: String): String {
         if (url.isBlank()) return ""
