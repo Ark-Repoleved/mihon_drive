@@ -342,8 +342,8 @@ class GoogleDrive : HttpSource(), ConfigurableSource {
 
     private fun buildImageUrl(fileId: String, mimeType: String? = null): String {
         return if (mimeType?.startsWith("video/") == true) {
-            // Use Google Drive preview format for videos (works in WebView)
-            "https://drive.google.com/file/d/$fileId/preview"
+            // Use direct download link for videos + fake extension
+            "https://drive.google.com/uc?export=download&id=$fileId&.mp4"
         } else {
             // Use direct download format for images
             "https://drive.usercontent.google.com/download?id=$fileId&export=view"
