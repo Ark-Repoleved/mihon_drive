@@ -7,7 +7,6 @@ A custom Mihon (Tachiyomi) extension that uses Google Drive as a manga source.
 ## Features
 
 - Read manga from Google Drive by entering a folder link
-- Supports folder and ZIP/CBZ chapter formats
 - Automatically detects `cover.jpg` as cover image
 
 ## Prerequisites
@@ -28,7 +27,7 @@ A custom Mihon (Tachiyomi) extension that uses Google Drive as a manga source.
 │   ├── 📁 Chapter 1/
 │   │   ├── 001.jpg
 │   │   └── ...
-│   └── 📄 Chapter 2.zip
+│   └── 📁 Chapter 2
 └── 📁 Manga B
     └── ...
 ```
@@ -59,3 +58,4 @@ A custom Mihon (Tachiyomi) extension that uses Google Drive as a manga source.
 ```
 
 APK will be generated at `src/all/googledrive/build/outputs/apk/debug/`
+
